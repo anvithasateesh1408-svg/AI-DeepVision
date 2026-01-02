@@ -2,15 +2,30 @@ import cv2
 import torch
 import streamlit as st
 import numpy as np
+import os
+import gdown
+
 
 from csrnet_model import CSRNet
 from utils_email import init_db, get_all_emails, send_alert_emails
+
+MODEL_PATH = "csrnet_video_finetuned_final.pth"
+GDRIVE_ID = "1ax1G5Q1s5lmD6MVa8w2EOU26gX4QCfaC"
+
+def download_model():
+    if not os.path.exists(MODEL_PATH):
+        with st.spinner("⬇️ Downloading CSRNet model..."):
+            url = f"https://drive.google.com/uc?id={GDRIVE_ID}"
+            gdown.download(url, MODEL_PATH, quiet=False)
+
+download_model()
+
 
 # ================= CONFIG =================
 st.set_page_config(page_title="Crowd Monitoring System (CSRNet)", layout="wide")
 
 DEVICE = "cpu"   # CSRNet is stable on CPU
-MODEL_PATH = r"C:\Users\Shiva Teja\Desktop\DeepVision\models\csrnet_video_finetuned_final.pth"
+
 
 DENSITY_ALERT_THRESHOLD = 70.0   # Crowd Density Index threshold
 
@@ -133,3 +148,4 @@ if uploaded_file:
                 st.warning(msg)
             else:
                 st.success("✅ SAFE")
+

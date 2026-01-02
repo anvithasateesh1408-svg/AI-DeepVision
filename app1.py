@@ -88,8 +88,13 @@ def process_frame(frame):
     with torch.no_grad():
         density = torch.relu(model(img_t))
 
-    density_map = density.squeeze().cpu().numpy()
-    crowd_count = float(density_map.sum())
+# ---- Crowd Count (Option 3: Scaled Density) ----
+raw_density_sum = float(density_map.sum())
+
+SCALE_FACTOR = 1000  # <-- IMPORTANT (you can tune 500–2000)
+
+density_index = raw_density_sum * SCALE_FACTOR
+
 
     # Visualization
     density_map = cv2.GaussianBlur(density_map, (13, 13), 0)
@@ -173,6 +178,7 @@ if uploaded_file:
                 st.warning(msg)
             else:
                 st.success("✅ SAFE")
+
 
 
 

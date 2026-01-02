@@ -52,25 +52,19 @@ init_db()
 @st.cache_resource
 def load_model():
     model = CSRNet()
-
     checkpoint = torch.load(MODEL_PATH, map_location="cpu")
 
-    # Handle checkpoint / DataParallel cases
-    if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
-        state_dict = checkpoint["state_dict"]
-    else:
-        state_dict = checkpoint
+    if "state_dict" in checkpoint:
+        checkpoint = checkpoint["state_dict"]
 
-    clean_state_dict = {}
-    for k, v in state_dict.items():
-        if k.startswith("module."):
-            clean_state_dict[k.replace("module.", "")] = v
-        else:
-            clean_state_dict[k] = v
+    new_state = {}
+    for k, v in checkpoint.items():
+        new_state[k.replace("module.", "")] = v
 
-    model = CSRNet(load_vgg_weights=True)
+    model.load_state_dict(new_state, strict=True)
     model.eval()
     return model
+
 
 
 model = load_model()
@@ -179,5 +173,6 @@ if uploaded_file:
                 st.warning(msg)
             else:
                 st.success("✅ SAFE")
+
 
 

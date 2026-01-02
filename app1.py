@@ -2,23 +2,31 @@ import cv2
 import torch
 import streamlit as st
 import numpy as np
-import os
-import gdown
+
 
 
 from csrnet_model import CSRNet
 from utils_email import init_db, get_all_emails, send_alert_emails
 
+import os
+import gdown
+
+
 MODEL_PATH = "csrnet_video_finetuned_final.pth"
-GDRIVE_ID = "1ax1G5Q1s5lmD6MVa8w2EOU26gX4QCfaC"
+GDRIVE_FILE_ID = "1ax1G5Q1s5lmD6MVa8w2EOU26gX4QCfaC"
 
 def download_model():
     if not os.path.exists(MODEL_PATH):
         with st.spinner("⬇️ Downloading CSRNet model..."):
-            url = f"https://drive.google.com/uc?id={GDRIVE_ID}"
-            gdown.download(url, MODEL_PATH, quiet=False)
+            gdown.download(
+                id=GDRIVE_FILE_ID,
+                output=MODEL_PATH,
+                quiet=False,
+                fuzzy=True
+            )
 
 download_model()
+
 
 
 # ================= CONFIG =================
@@ -148,4 +156,5 @@ if uploaded_file:
                 st.warning(msg)
             else:
                 st.success("✅ SAFE")
+
 

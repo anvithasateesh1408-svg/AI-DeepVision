@@ -68,7 +68,7 @@ def load_model():
         else:
             clean_state_dict[k] = v
 
-    model.load_state_dict(clean_state_dict, strict=False)
+    model = CSRNet(load_vgg_weights=True)
     model.eval()
     return model
 
@@ -180,3 +180,4 @@ if uploaded_file:
                 st.warning(msg)
             else:
                 st.success("✅ SAFE")
+

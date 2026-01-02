@@ -138,15 +138,14 @@ def estimate_from_video(video_path, n_frames=10):
             last_overlay = overlay
 
         idx += 1
-        if len(counts) >= n_frames:
-            break
 
     cap.release()
 
-    if not counts:
-        return None, 0.0
+    if len(counts) == 0:
+        return last_overlay, 0.0   # safe fallback
 
     return last_overlay, float(np.mean(counts))
+
 
 
 # =========================================================
@@ -180,4 +179,5 @@ if uploaded_file:
                 st.warning(msg)
             else:
                 st.success("✅ SAFE")
+
 

@@ -1,12 +1,13 @@
-import os
 import cv2
 import torch
-import gdown
 import streamlit as st
 import numpy as np
+import os
+import gdown
 
 from csrnet_model import CSRNet
 from utils_email import init_db, get_all_emails, send_alert_emails
+
 
 
 # =========================================================
@@ -179,6 +180,7 @@ if uploaded_file:
                 st.warning(msg)
             else:
                 st.success("✅ SAFE")
+
 
 
 

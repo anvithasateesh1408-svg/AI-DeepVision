@@ -1,23 +1,35 @@
+import os
 import cv2
 import torch
+import gdown
 import streamlit as st
 import numpy as np
-
-
 
 from csrnet_model import CSRNet
 from utils_email import init_db, get_all_emails, send_alert_emails
 
-import os
-import gdown
 
+# =========================================================
+# CONFIG
+# =========================================================
+st.set_page_config(
+    page_title="Crowd Monitoring System (CSRNet)",
+    layout="wide"
+)
+
+DEVICE = "cpu"
+DENSITY_ALERT_THRESHOLD = 70.0
 
 MODEL_PATH = "csrnet_video_finetuned_final.pth"
 GDRIVE_FILE_ID = "1ax1G5Q1s5lmD6MVa8w2EOU26gX4QCfaC"
 
+
+# =========================================================
+# DOWNLOAD MODEL (Google Drive)
+# =========================================================
 def download_model():
     if not os.path.exists(MODEL_PATH):
-        with st.spinner("⬇️ Downloading CSRNet model..."):
+        with st.spinner("⬇️ Downloading CSRNet model (one-time)..."):
             gdown.download(
                 id=GDRIVE_FILE_ID,
                 output=MODEL_PATH,
@@ -28,81 +40,64 @@ def download_model():
 download_model()
 
 
-
-# ================= CONFIG =================
-st.set_page_config(page_title="Crowd Monitoring System (CSRNet)", layout="wide")
-
-DEVICE = "cpu"   # CSRNet is stable on CPU
-
-
-DENSITY_ALERT_THRESHOLD = 70.0   # Crowd Density Index threshold
-
+# =========================================================
+# INIT DATABASE
+# =========================================================
 init_db()
 
-# ================= LOAD MODEL =================
+
+# =========================================================
+# LOAD MODEL (SAFE FOR DEPLOYMENT)
+# =========================================================
 @st.cache_resource
 def load_model():
     model = CSRNet()
 
     checkpoint = torch.load(MODEL_PATH, map_location="cpu")
 
-    # Case 1: checkpoint is a dict with 'state_dict'
+    # Handle checkpoint / DataParallel cases
     if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
         state_dict = checkpoint["state_dict"]
     else:
         state_dict = checkpoint
 
-    # Remove 'module.' if model was trained using DataParallel
-    new_state_dict = {}
+    clean_state_dict = {}
     for k, v in state_dict.items():
         if k.startswith("module."):
-            new_state_dict[k.replace("module.", "")] = v
+            clean_state_dict[k.replace("module.", "")] = v
         else:
-            new_state_dict[k] = v
+            clean_state_dict[k] = v
 
-    model.load_state_dict(new_state_dict, strict=False)
+    model.load_state_dict(clean_state_dict, strict=False)
     model.eval()
     return model
 
-
-@st.cache_resource
-def load_model():
-    model = CSRNet()
-    state = torch.load(MODEL_PATH, map_location="cpu")
-    model.load_state_dict(state, strict=False)
-    model.eval()
-    return model
 
 model = load_model()
 
-# ================= PROCESS SINGLE FRAME =================
+
+# =========================================================
+# PROCESS FRAME
+# =========================================================
 def process_frame(frame):
     H, W, _ = frame.shape
 
     img = cv2.resize(frame, (640, 360))
     img = img.astype(np.float32) / 255.0
 
-    # ImageNet normalization (CSRNet requirement)
     mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
-    std  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+    std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
     img = (img - mean) / std
 
-    img_t = (
-        torch.from_numpy(img)
-        .permute(2, 0, 1)
-        .unsqueeze(0)
-        .float()
-    )
+    img_t = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0)
 
     with torch.no_grad():
         density = torch.relu(model(img_t))
 
     density_map = density.squeeze().cpu().numpy()
+    crowd_count = float(density_map.sum())
 
-    # ---- Crowd Density Index ----
-    density_index = float(density_map.sum())
-
-    # ---- Density Map Visualization ----
+    # Visualization
     density_map = cv2.GaussianBlur(density_map, (13, 13), 0)
     density_map = cv2.resize(density_map, (W, H))
 
@@ -116,17 +111,20 @@ def process_frame(frame):
 
     overlay = cv2.addWeighted(frame, 0.7, heatmap, 0.3, 0)
 
-    return overlay, density_index
+    return overlay, crowd_count
 
-# ================= VIDEO LEVEL ESTIMATION =================
+
+# =========================================================
+# VIDEO ESTIMATION
+# =========================================================
 def estimate_from_video(video_path, n_frames=10):
     cap = cv2.VideoCapture(video_path)
 
-    density_values = []
+    counts = []
     last_overlay = None
 
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    frame_step = max(total_frames // n_frames, 1)
+    step = max(total_frames // n_frames, 1)
 
     idx = 0
     while cap.isOpened():
@@ -134,24 +132,26 @@ def estimate_from_video(video_path, n_frames=10):
         if not ret:
             break
 
-        if idx % frame_step == 0:
-            overlay, di = process_frame(frame)
-            density_values.append(di)
+        if idx % step == 0:
+            overlay, count = process_frame(frame)
+            counts.append(count)
             last_overlay = overlay
 
         idx += 1
-        if len(density_values) >= n_frames:
+        if len(counts) >= n_frames:
             break
 
     cap.release()
 
-    if not density_values:
+    if not counts:
         return None, 0.0
 
-    avg_density_index = float(np.mean(density_values))
-    return last_overlay, avg_density_index
+    return last_overlay, float(np.mean(counts))
 
-# ================= UI =================
+
+# =========================================================
+# UI
+# =========================================================
 st.title("🧠 Crowd Monitoring System (CSRNet)")
 
 uploaded_file = st.file_uploader(
@@ -163,7 +163,7 @@ if uploaded_file:
     with open("temp.mp4", "wb") as f:
         f.write(uploaded_file.read())
 
-    overlay, density_index = estimate_from_video("temp.mp4")
+    overlay, crowd_count = estimate_from_video("temp.mp4")
 
     if overlay is not None:
         col1, col2 = st.columns([3, 1])
@@ -172,15 +172,11 @@ if uploaded_file:
             st.image(overlay, caption="Crowd Density Map", width=700)
 
         with col2:
-            st.metric("📊 Crowd Density Index", f"{density_index:.2f}")
+            st.metric("📊 Crowd Count", f"{crowd_count:.2f}")
 
-            if density_index >= DENSITY_ALERT_THRESHOLD:
-                st.error("⚠️ CROWD DENSITY ALERT")
-                send_alert_emails(get_all_emails(), density_index)
-                msg = send_alert_emails(get_all_emails(), density_index)
+            if crowd_count >= DENSITY_ALERT_THRESHOLD:
+                st.error("⚠️ CROWD ALERT")
+                msg = send_alert_emails(get_all_emails(), crowd_count)
                 st.warning(msg)
             else:
                 st.success("✅ SAFE")
-
-
-

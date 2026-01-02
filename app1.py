@@ -9,9 +9,7 @@ from csrnet_model import CSRNet
 from utils_email import init_db, get_all_emails, send_alert_emails
 
 
-# =========================================================
-# STREAMLIT CONFIG
-# =========================================================
+# ================= CONFIG =================
 st.set_page_config(
     page_title="Crowd Monitoring System (CSRNet)",
     layout="wide"
@@ -24,12 +22,10 @@ MODEL_PATH = "csrnet_video_finetuned_final.pth"
 GDRIVE_FILE_ID = "1ax1G5Q1s5lmD6MVa8w2EOU26gX4QCfaC"
 
 
-# =========================================================
-# DOWNLOAD MODEL (ONE TIME)
-# =========================================================
+# ================= DOWNLOAD MODEL =================
 def download_model():
     if not os.path.exists(MODEL_PATH):
-        with st.spinner("⬇️ Downloading CSRNet model (one-time)..."):
+        with st.spinner("⬇️ Downloading CSRNet model..."):
             gdown.download(
                 id=GDRIVE_FILE_ID,
                 output=MODEL_PATH,
@@ -40,22 +36,17 @@ def download_model():
 download_model()
 
 
-# =========================================================
-# INIT DATABASE
-# =========================================================
+# ================= DATABASE =================
 init_db()
 
 
-# =========================================================
-# LOAD MODEL (SAFE)
-# =========================================================
+# ================= LOAD MODEL =================
 @st.cache_resource
 def load_model():
     model = CSRNet()
 
     checkpoint = torch.load(MODEL_PATH, map_location="cpu")
 
-    # Handle DataParallel / state_dict case
     if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
         checkpoint = checkpoint["state_dict"]
 
@@ -71,19 +62,15 @@ def load_model():
 model = load_model()
 
 
-# =========================================================
-# PROCESS FRAME
-# =========================================================
+# ================= FRAME PROCESSING =================
 def process_frame(frame):
     H, W, _ = frame.shape
 
-    # Resize
     img = cv2.resize(frame, (640, 360))
     img = img.astype(np.float32) / 255.0
 
-    # ImageNet normalization
     mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
-    std  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+    std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
     img = (img - mean) / std
 
     img_t = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0)
@@ -92,11 +79,8 @@ def process_frame(frame):
         density = torch.relu(model(img_t))
 
     density_map = density.squeeze().cpu().numpy()
-
-    # ================== CROWD COUNT (FIXED) ==================
     crowd_count = float(density_map.sum())
 
-    # ================== VISUALIZATION ==================
     density_map = cv2.GaussianBlur(density_map, (13, 13), 0)
     density_map = cv2.resize(density_map, (W, H))
 
@@ -109,16 +93,12 @@ def process_frame(frame):
     )
 
     overlay = cv2.addWeighted(frame, 0.7, heatmap, 0.3, 0)
-
     return overlay, crowd_count
 
 
-# =========================================================
-# VIDEO ESTIMATION
-# =========================================================
+# ================= VIDEO =================
 def estimate_from_video(video_path, n_frames=10):
     cap = cv2.VideoCapture(video_path)
-
     counts = []
     last_overlay = None
 
@@ -137,21 +117,18 @@ def estimate_from_video(video_path, n_frames=10):
             last_overlay = overlay
 
         idx += 1
-
         if len(counts) >= n_frames:
             break
 
     cap.release()
 
-    if len(counts) == 0:
+    if not counts:
         return None, 0.0
 
     return last_overlay, float(np.mean(counts))
 
 
-# =========================================================
-# UI
-# =========================================================
+# ================= UI =================
 st.title("🧠 Crowd Monitoring System (CSRNet)")
 
 uploaded_file = st.file_uploader(
@@ -176,7 +153,6 @@ if uploaded_file:
 
             if crowd_count >= DENSITY_ALERT_THRESHOLD:
                 st.error("⚠️ CROWD ALERT")
-                msg = send_alert_emails(get_all_emails(), crowd_count)
-                st.warning(msg)
+                st.warning(send_alert_emails(get_all_emails(), crowd_count))
             else:
                 st.success("✅ SAFE")

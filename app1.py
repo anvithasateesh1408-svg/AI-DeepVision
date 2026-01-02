@@ -85,15 +85,16 @@ def process_frame(frame):
 
     img_t = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0)
 
-    with torch.no_grad():
-        density = torch.relu(model(img_t))
+with torch.no_grad():
+    density = torch.relu(model(img_t))
 
-# ---- Crowd Count (Option 3: Scaled Density) ----
+density_map = density.squeeze().cpu().numpy()
+
+# ---- Crowd Count (FIX) ----
 raw_density_sum = float(density_map.sum())
-
-SCALE_FACTOR = 1000  # <-- IMPORTANT (you can tune 500–2000)
-
+SCALE_FACTOR = 1000
 density_index = raw_density_sum * SCALE_FACTOR
+
 
 
     # Visualization
@@ -178,6 +179,7 @@ if uploaded_file:
                 st.warning(msg)
             else:
                 st.success("✅ SAFE")
+
 
 
 

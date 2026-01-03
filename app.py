@@ -30,28 +30,6 @@ GDRIVE_FILE_ID = "1ax1G5Q1s5lmD6MVa8w2EOU26gX4QCfaC"
 # ================= INIT DB =================
 init_db()
 
-# ================= ADD EMAIL UI (CLOUD REQUIRED) =================
-st.subheader("📧 Alert Email Configuration")
-
-email_input = st.text_input("Enter email for crowd alerts")
-
-if st.button("Add Alert Email"):
-    if email_input:
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT OR IGNORE INTO emails (email) VALUES (?)",
-            (email_input,)
-        )
-        conn.commit()
-        conn.close()
-        st.success("✅ Email added successfully")
-
-emails = get_all_emails()
-if emails:
-    st.info(f"📬 Alerts will be sent to: {', '.join(emails)}")
-else:
-    st.warning("⚠️ No alert emails configured yet")
 
 # ================= DOWNLOAD MODEL =================
 @st.cache_resource

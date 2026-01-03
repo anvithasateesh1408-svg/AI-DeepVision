@@ -35,8 +35,16 @@ def init_db():
             email TEXT UNIQUE NOT NULL
         )
     """)
+
+    # 🔥 AUTO-INSERT ADMIN EMAIL (CLOUD SAFE)
+    cursor.execute(
+        "INSERT OR IGNORE INTO emails (email) VALUES (?)",
+        ("anvithasateesh1408@gmail.com",)
+    )
+
     conn.commit()
     conn.close()
+
 
 
 def get_all_emails():
@@ -88,3 +96,4 @@ Immediate action recommended.
 
     except Exception as e:
         return f"❌ SMTP Error: {str(e)}"
+

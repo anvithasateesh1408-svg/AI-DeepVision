@@ -1,26 +1,56 @@
-# Ignore datasets
-Dataset/
-preprocessed/
-preprocessed_B/
-path/
-
-# PyTorch model weights
-*.pth
-
-# Python cache
+# ===============================
+# Python
+# ===============================
 __pycache__/
-*.pyc
+*.py[cod]
+*.pyo
 
-# Jupyter notebook checkpoints
-.ipynb_checkpoints/
-
-# Virtual environment
+# ===============================
+# Virtual Environments
+# ===============================
 venv/
+env/
+.venv/
 
-# Logs & system files
+# ===============================
+# Environment Variables (SECURITY)
+# ===============================
+.env
+.env.*
+*.env
+
+# ===============================
+# Streamlit
+# ===============================
+.streamlit/
+
+# ===============================
+# Database
+# ===============================
+*.db
+*.sqlite3
+
+# ===============================
+# Temporary / Runtime Files
+# ===============================
+temp.mp4
 *.log
-Thumbs.db
-.DS_Store
-*.mp4
-snapshots/
 
+# ===============================
+# OS Files
+# ===============================
+.DS_Store
+Thumbs.db
+
+# ===============================
+# Model / Weights (OPTIONAL)
+# Uncomment if model is large and hosted on GDrive
+# ===============================
+# *.pth
+# *.pt
+
+# ===============================
+# IDE / Editor
+# ===============================
+.vscode/
+.idea/

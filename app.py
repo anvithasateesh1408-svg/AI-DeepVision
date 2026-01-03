@@ -4,6 +4,7 @@ import streamlit as st
 import numpy as np
 import os
 import gdown
+import sqlite3
 
 from csrnet_model import CSRNet
 from utils_email import init_db, get_all_emails, send_alert_emails
@@ -14,15 +15,43 @@ st.set_page_config(
     layout="wide"
 )
 
-DEVICE = "cpu"   # CSRNet is stable on CPU
+DEVICE = "cpu"
 DENSITY_ALERT_THRESHOLD = 70.0
+
+# ================= PATHS (CRITICAL FOR CLOUD) =================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, "csrnet_video_finetuned_final.pth")
+VIDEO_PATH = os.path.join(BASE_DIR, "temp.mp4")
+DB_PATH = os.path.join(BASE_DIR, "emails.db")
 
 # -------- Google Drive Model Config --------
 GDRIVE_FILE_ID = "1ax1G5Q1s5lmD6MVa8w2EOU26gX4QCfaC"
-MODEL_PATH = "csrnet_video_finetuned_final.pth"
 
 # ================= INIT DB =================
 init_db()
+
+# ================= ADD EMAIL UI (CLOUD REQUIRED) =================
+st.subheader("📧 Alert Email Configuration")
+
+email_input = st.text_input("Enter email for crowd alerts")
+
+if st.button("Add Alert Email"):
+    if email_input:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT OR IGNORE INTO emails (email) VALUES (?)",
+            (email_input,)
+        )
+        conn.commit()
+        conn.close()
+        st.success("✅ Email added successfully")
+
+emails = get_all_emails()
+if emails:
+    st.info(f"📬 Alerts will be sent to: {', '.join(emails)}")
+else:
+    st.warning("⚠️ No alert emails configured yet")
 
 # ================= DOWNLOAD MODEL =================
 @st.cache_resource
@@ -56,12 +85,7 @@ def process_frame(frame):
     std  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
     img = (img - mean) / std
 
-    img_t = (
-        torch.from_numpy(img)
-        .permute(2, 0, 1)
-        .unsqueeze(0)
-        .float()
-    )
+    img_t = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0).float()
 
     with torch.no_grad():
         density = torch.relu(model(img_t))
@@ -114,10 +138,9 @@ def estimate_from_video(video_path, n_frames=10):
     if not density_values:
         return None, 0.0
 
-    avg_density_index = float(np.mean(density_values))
-    return last_overlay, avg_density_index
+    return last_overlay, float(np.mean(density_values))
 
-# ================= UI =================
+# ================= MAIN UI =================
 st.title("🧠 Crowd Monitoring System (CSRNet)")
 
 uploaded_file = st.file_uploader(
@@ -126,10 +149,10 @@ uploaded_file = st.file_uploader(
 )
 
 if uploaded_file:
-    with open("temp.mp4", "wb") as f:
+    with open(VIDEO_PATH, "wb") as f:
         f.write(uploaded_file.read())
 
-    overlay, density_index = estimate_from_video("temp.mp4")
+    overlay, density_index = estimate_from_video(VIDEO_PATH)
 
     if overlay is not None:
         col1, col2 = st.columns([3, 1])

@@ -1,219 +1,148 @@
 import cv2
 import torch
-import numpy as np
 import streamlit as st
-import time
+import numpy as np
 import os
+import gdown
 
 from csrnet_model import CSRNet
-from alert import send_email   # 🔔 EMAIL ALERT MODULE
+from utils_email import init_db, get_all_emails, send_alert_emails
 
-# ================= PAGE CONFIG =================
+# ================= CONFIG =================
 st.set_page_config(
-    page_title="DeepVision Crowd Monitor – Milestone 4",
+    page_title="Crowd Monitoring System (CSRNet)",
     layout="wide"
 )
 
-# ================= DEVICE =================
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = "cpu"   # CSRNet is stable on CPU
+DENSITY_ALERT_THRESHOLD = 70.0
 
-# ================= CONFIG =================
-MODEL_PATH = "csrnet_epoch105.pth"
-CROWD_THRESHOLD = 70
-ALERT_EMAIL = "receiver@gmail.com"   # 🔔 CHANGE THIS
-SNAPSHOT_DIR = "snapshots"
+# -------- Google Drive Model Config --------
+GDRIVE_FILE_ID = "1ax1G5Q1s5lmD6MVa8w2EOU26gX4QCfaC"
+MODEL_PATH = "csrnet_video_finetuned_final.pth"
 
-os.makedirs(SNAPSHOT_DIR, exist_ok=True)
+# ================= INIT DB =================
+init_db()
 
-# ================= SESSION STATE =================
-if "alert_sent" not in st.session_state:
-    st.session_state.alert_sent = False
+# ================= DOWNLOAD MODEL =================
+@st.cache_resource
+def download_model():
+    if not os.path.exists(MODEL_PATH):
+        with st.spinner("⬇️ Downloading CSRNet model from Google Drive..."):
+            url = f"https://drive.google.com/uc?id={GDRIVE_FILE_ID}"
+            gdown.download(url, MODEL_PATH, quiet=False)
+    return MODEL_PATH
 
 # ================= LOAD MODEL =================
 @st.cache_resource
 def load_model():
-    model = CSRNet().to(DEVICE)
-
-    checkpoint = torch.load(MODEL_PATH, map_location=DEVICE)
-
-    if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
-        state_dict = checkpoint["state_dict"]
-    else:
-        state_dict = checkpoint
-
-    fixed_state = {
-        k.replace("module.", "").replace("core.", ""): v
-        for k, v in state_dict.items()
-    }
-
-    model.load_state_dict(fixed_state, strict=True)
+    download_model()
+    model = CSRNet()
+    state = torch.load(MODEL_PATH, map_location=DEVICE)
+    model.load_state_dict(state, strict=False)
     model.eval()
     return model
 
 model = load_model()
-st.success("✅ CSRNet model loaded successfully")
 
-# ================= PREPROCESS =================
-def preprocess(frame):
-    frame = cv2.resize(frame, (512, 512))
-    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    frame = frame.astype(np.float32) / 255.0
+# ================= PROCESS SINGLE FRAME =================
+def process_frame(frame):
+    H, W, _ = frame.shape
+
+    img = cv2.resize(frame, (640, 360))
+    img = img.astype(np.float32) / 255.0
 
     mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
     std  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
-    frame = (frame - mean) / std
+    img = (img - mean) / std
 
-    tensor = torch.from_numpy(frame).permute(2, 0, 1).unsqueeze(0)
-    return tensor.to(DEVICE)
-
-# ================= PROCESS FRAME =================
-def process_frame(frame):
-    h, w, _ = frame.shape
-    input_tensor = preprocess(frame)
+    img_t = (
+        torch.from_numpy(img)
+        .permute(2, 0, 1)
+        .unsqueeze(0)
+        .float()
+    )
 
     with torch.no_grad():
-        density = model(input_tensor)
+        density = torch.relu(model(img_t))
 
     density_map = density.squeeze().cpu().numpy()
-    density_map[density_map < 0] = 0
+    density_index = float(density_map.sum())
 
-    count = int(density_map.sum())
+    density_map = cv2.GaussianBlur(density_map, (13, 13), 0)
+    density_map = cv2.resize(density_map, (W, H))
 
-    density_vis = cv2.resize(density_map, (w, h))
-    density_norm = density_vis / density_vis.max() if density_vis.max() > 0 else density_vis
+    p98 = np.percentile(density_map, 98)
+    density_vis = np.clip(density_map / (p98 + 1e-6), 0, 1)
 
     heatmap = cv2.applyColorMap(
-        (density_norm * 255).astype(np.uint8),
+        (density_vis * 255).astype(np.uint8),
         cv2.COLORMAP_JET
     )
 
-    overlay = cv2.addWeighted(frame, 0.75, heatmap, 0.25, 0)
+    overlay = cv2.addWeighted(frame, 0.7, heatmap, 0.3, 0)
 
-    cv2.rectangle(overlay, (0, 0), (w, 55), (0, 0, 0), -1)
-    cv2.putText(overlay, f"Count: {count}", (20, 38),
-                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
+    return overlay, density_index
 
-    status = "CROWD ALERT" if count >= CROWD_THRESHOLD else "CROWD NORMAL"
-    color = (0, 0, 255) if count >= CROWD_THRESHOLD else (0, 255, 0)
+# ================= VIDEO LEVEL ESTIMATION =================
+def estimate_from_video(video_path, n_frames=10):
+    cap = cv2.VideoCapture(video_path)
 
-    cv2.putText(overlay, status, (260, 38),
-                cv2.FONT_HERSHEY_SIMPLEX, 1, color, 3)
+    density_values = []
+    last_overlay = None
 
-    return overlay, count
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    frame_step = max(total_frames // n_frames, 1)
+
+    idx = 0
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        if idx % frame_step == 0:
+            overlay, di = process_frame(frame)
+            density_values.append(di)
+            last_overlay = overlay
+
+        idx += 1
+        if len(density_values) >= n_frames:
+            break
+
+    cap.release()
+
+    if not density_values:
+        return None, 0.0
+
+    avg_density_index = float(np.mean(density_values))
+    return last_overlay, avg_density_index
 
 # ================= UI =================
-st.title("🧠 DeepVision Crowd Monitor ")
+st.title("🧠 Crowd Monitoring System (CSRNet)")
 
-mode = st.radio("Select Input Mode", ["Webcam", "Upload Video"])
+uploaded_file = st.file_uploader(
+    "Upload a crowd video",
+    type=["mp4", "avi", "mov"]
+)
 
-frame_box = st.image([])
-count_box = st.empty()
-alert_box = st.empty()
+if uploaded_file:
+    with open("temp.mp4", "wb") as f:
+        f.write(uploaded_file.read())
 
-# ================= WEBCAM MODE =================
-if mode == "Webcam":
-    start = st.checkbox("▶ Start Webcam")
+    overlay, density_index = estimate_from_video("temp.mp4")
 
-    if start:
-        cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-        prev_time = time.time()
+    if overlay is not None:
+        col1, col2 = st.columns([3, 1])
 
-        while cap.isOpened() and start:
-            ret, frame = cap.read()
-            if not ret:
-                break
+        with col1:
+            st.image(overlay, caption="Crowd Density Map", width=700)
 
-            overlay, count = process_frame(frame)
+        with col2:
+            st.metric("📊 Crowd Density Index", f"{density_index:.2f}")
 
-            now = time.time()
-            fps = 1 / max(1e-6, now - prev_time)
-            prev_time = now
-
-            frame_box.image(overlay, channels="BGR")
-            count_box.metric("👥 Crowd Count", count)
-
-            if count >= CROWD_THRESHOLD:
-                alert_box.error("🚨 OVERCROWDING DETECTED")
-
-                if not st.session_state.alert_sent:
-                    snapshot_path = f"{SNAPSHOT_DIR}/alert_{int(time.time())}.jpg"
-                    cv2.imwrite(snapshot_path, overlay)
-
-                    send_email(
-                        to_email=ALERT_EMAIL,
-                        count=count,
-                        alert_text="Overcrowding detected",
-                        fps=fps,
-                        snapshot_path=snapshot_path
-                    )
-
-                    st.session_state.alert_sent = True
+            if density_index >= DENSITY_ALERT_THRESHOLD:
+                st.error("⚠️ CROWD DENSITY ALERT")
+                msg = send_alert_emails(get_all_emails(), density_index)
+                st.warning(msg)
             else:
-                alert_box.success("✅ Crowd Level Normal")
-                st.session_state.alert_sent = False
-
-        cap.release()
-
-# ================= VIDEO MODE =================
-if mode == "Upload Video":
-    video = st.file_uploader("Upload a video", type=["mp4", "avi"])
-
-    if video:
-        with open("temp.mp4", "wb") as f:
-            f.write(video.read())
-
-        cap = cv2.VideoCapture("temp.mp4")
-        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-        start_time = time.time()
-        frame_id = 0
-        prev_time = time.time()
-
-        while cap.isOpened():
-            ret, frame = cap.read()
-            if not ret:
-                break
-
-            frame_id += 1
-            overlay, count = process_frame(frame)
-
-            now = time.time()
-            fps = 1 / max(1e-6, now - prev_time)
-            prev_time = now
-
-            frame_box.image(overlay, channels="BGR")
-
-            elapsed = time.time() - start_time
-            progress = (frame_id / total) * 100 if total > 0 else 0
-
-            count_box.markdown(
-                f"""
-🎬 **Frame:** {frame_id}/{total}  
-📊 **Progress:** {progress:.1f}%  
-👥 **Count:** {count}  
-⚡ **FPS:** {fps:.1f}
-"""
-            )
-
-            if count >= CROWD_THRESHOLD:
-                alert_box.error("🚨 OVERCROWDING DETECTED")
-
-                if not st.session_state.alert_sent:
-                    snapshot_path = f"{SNAPSHOT_DIR}/alert_{int(time.time())}.jpg"
-                    cv2.imwrite(snapshot_path, overlay)
-
-                    send_email(
-                        to_email=ALERT_EMAIL,
-                        count=count,
-                        alert_text="Overcrowding detected",
-                        fps=fps,
-                        snapshot_path=snapshot_path
-                    )
-
-                    st.session_state.alert_sent = True
-            else:
-                alert_box.success("✅ Crowd Level Normal")
-                st.session_state.alert_sent = False
-
-        cap.release()
-        st.success("🎉 Video processed successfully!")
+                st.success("✅ SAFE")
